@@ -1,3 +1,4 @@
+import os
 import streamlit as st
 import pandas as pd
 import joblib
@@ -9,6 +10,55 @@ from sklearn.ensemble import GradientBoostingRegressor
 
 st.set_page_config(page_title="Prediksi Harga Laptop", layout="centered")
 
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+MODEL_PATH = os.path.join(BASE_DIR, "model_laptop.joblib")
+META_PATH = os.path.join(BASE_DIR, "metadata_laptop.joblib")
+
+def baca_dataset():
+    kandidat = [
+        os.path.join(BASE_DIR, "laptop_price.csv"),
+        os.path.join(BASE_DIR, "laptop_price - dataset.csv"),
+    ]
+    csv_path = next((p for p in kandidat if os.path.exists(p)), None)
+    if csv_path is None:
+        st.error(f"File dataset CSV tidak ditemukan di folder: {BASE_DIR}")
+        st.stop()
+
+    try:
+        df = pd.read_csv(csv_path, encoding="utf-8")
+    except UnicodeDecodeError:
+        df = pd.read_csv(csv_path, encoding="latin-1")
+
+    df.columns = [c.strip() for c in df.columns]
+
+    # Otomatis ekstrak kolom jika CSV memakai format mentah Kaggle
+    if "Cpu" in df.columns and "CPU_Company" not in df.columns:
+        df["CPU_Company"] = df["Cpu"].astype(str).apply(lambda x: x.split()[0].strip())
+        df["CPU_Frequency (GHz)"] = (
+            df["Cpu"].astype(str)
+            .str.extract(r"(\d+(?:\.\d+)?)\s*GHz", expand=False)
+            .astype(float)
+        )
+        df["CPU_Type"] = (
+            df["Cpu"].astype(str)
+            .str.replace(r"\s*\d+(?:\.\d+)?\s*GHz$", "", regex=True)
+            .apply(lambda x: " ".join(x.split()[1:]).strip())
+        )
+    if "Ram" in df.columns and "RAM (GB)" not in df.columns:
+        df["RAM (GB)"] = df["Ram"].astype(str).str.replace("GB", "", regex=False).str.strip().astype(int)
+    if "Gpu" in df.columns and "GPU_Company" not in df.columns:
+        df["GPU_Company"] = df["Gpu"].astype(str).apply(lambda x: x.split()[0].strip())
+        df["GPU_Type"] = df["Gpu"].astype(str).apply(lambda x: " ".join(x.split()[1:]).strip())
+    if "Weight" in df.columns and "Weight (kg)" not in df.columns:
+        df["Weight (kg)"] = df["Weight"].astype(str).str.replace("kg", "", regex=False).str.strip().astype(float)
+    if "Price_euros" in df.columns and "Price (Euro)" not in df.columns:
+        df["Price (Euro)"] = df["Price_euros"].astype(float)
+
+    for col in df.select_dtypes(include="object").columns:
+        df[col] = df[col].astype(str).str.strip()
+
+    return df
+
 @st.cache_resource
 def muat_model_dan_meta():
     kolom_wajib = [
@@ -17,16 +67,14 @@ def muat_model_dan_meta():
         "RAM (GB)", "Memory", "GPU_Company", "GPU_Type", "OpSys", "Weight (kg)"
     ]
     try:
-        model = joblib.load("model_laptop.joblib")
-        meta = joblib.load("metadata_laptop.joblib")
+        model = joblib.load(MODEL_PATH)
+        meta = joblib.load(META_PATH)
         if all(k in meta for k in kolom_wajib):
             return model, meta
     except Exception:
         pass
 
-    df = pd.read_csv("laptop_price.csv")
-    for col in df.select_dtypes(include="object").columns:
-        df[col] = df[col].astype(str).str.strip()
+    df = baca_dataset()
 
     fitur_kategorikal = [
         "Company", "Product", "TypeName", "ScreenResolution",
@@ -35,6 +83,7 @@ def muat_model_dan_meta():
     ]
     fitur_numerik = ["Inches", "CPU_Frequency (GHz)", "RAM (GB)", "Weight (kg)"]
 
+    df = df.dropna(subset=fitur_kategorikal + fitur_numerik + ["Price (Euro)"])
     X = df[fitur_kategorikal + fitur_numerik]
     y = df["Price (Euro)"]
     X_train, _, y_train, _ = train_test_split(X, y, test_size=0.2, random_state=42)
@@ -71,8 +120,12 @@ def muat_model_dan_meta():
         "Weight (kg)": sorted(df["Weight (kg)"].unique().tolist())
     }
 
-    joblib.dump(model, "model_laptop.joblib")
-    joblib.dump(meta, "metadata_laptop.joblib")
+    try:
+        joblib.dump(model, MODEL_PATH)
+        joblib.dump(meta, META_PATH)
+    except Exception:
+        pass
+
     return model, meta
 
 model, meta = muat_model_dan_meta()
